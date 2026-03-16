@@ -1,0 +1,11 @@
+# Python virtual environments
+.venv/
+**/.venv/
+
+# VS Code settings
+.vscode/
+**/.vscode/
+
+# Ignore any directory with "result" in its name
+*result*/
+**/*result*/

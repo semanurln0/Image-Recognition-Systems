@@ -1,0 +1,6 @@
+{
+  "threshold_method": "Otsu on grayscale (inverse binary)",
+  "otsu_threshold_value": 149.0,
+  "text_pixels": 39605,
+  "background_pixels": 1434955
+}
