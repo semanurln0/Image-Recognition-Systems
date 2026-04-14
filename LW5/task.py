@@ -77,23 +77,35 @@ def prepare_dataset(ds, shuffle=False):
 
 
 def build_unet_xception(img_size=IMG_SIZE, num_classes=3):
-    inputs = tf.keras.Input(shape=(img_size, img_size, 3))
-
-    base_model = tf.keras.applications.Xception(
-        weights="imagenet",
-        include_top=False,
-        input_tensor=inputs,
-    )
-    base_model.trainable = False
-
+    # Build Xception with input_shape so it remains a named sub-model.
+    # Using input_tensor would flatten all its layers into the outer model,
+    # making model.get_layer("xception") fail at fine-tuning time.
     skip_names = [
         "block1_conv2_act",
         "block3_sepconv2_bn",
         "block4_sepconv2_bn",
         "block13_sepconv2_bn",
     ]
-    skips = [base_model.get_layer(name).output for name in skip_names]
-    x = base_model.get_layer("block14_sepconv2_act").output
+    backbone = tf.keras.applications.Xception(
+        weights="imagenet",
+        include_top=False,
+        input_shape=(img_size, img_size, 3),
+    )
+    backbone.trainable = False
+
+    # Build an encoder sub-model that exposes the bottleneck + skip tensors.
+    encoder_outputs = [backbone.get_layer(n).output for n in skip_names]
+    encoder_outputs.append(backbone.get_layer("block14_sepconv2_act").output)
+    encoder = tf.keras.Model(
+        inputs=backbone.input,
+        outputs=encoder_outputs,
+        name="xception",
+    )
+
+    inputs = tf.keras.Input(shape=(img_size, img_size, 3))
+    enc_out = encoder(inputs)
+    skips = enc_out[:-1]
+    x = enc_out[-1]
 
     decoder_filters = [512, 256, 128, 64]
     for filters, skip in zip(decoder_filters, reversed(skips)):
