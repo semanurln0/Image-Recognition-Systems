@@ -306,7 +306,8 @@ def main():
     print("Loading Oxford-IIIT Pet dataset via TFDS...")
     train_raw, val_raw, test_raw, info = load_oxford_iiit_pet()
     print("Dataset loaded.")
-    print(f"Dataset train split total size: {info.splits['train'].num_examples} (using subset)")
+    train_total = info.splits["train"].num_examples if "train" in info.splits else "unknown"
+    print(f"Dataset train split total size: {train_total} (using subset)")
     print(f"Using train/val/test samples: {TRAIN_SAMPLES}/{VAL_SAMPLES}/{TEST_SAMPLES}")
 
     print("Preparing datasets...")
