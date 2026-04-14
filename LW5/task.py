@@ -30,7 +30,10 @@ TARGET_ACCURACY = 0.97
 
 SEED = 42
 tf.keras.utils.set_random_seed(SEED)
-tf.config.experimental.enable_op_determinism()
+try:
+    tf.config.experimental.enable_op_determinism()
+except (AttributeError, ValueError):
+    pass
 
 
 def load_oxford_iiit_pet():
@@ -120,7 +123,7 @@ def build_unet_xception(img_size=IMG_SIZE, num_classes=3):
     outputs = tf.keras.layers.Conv2D(num_classes, 1, activation="softmax")(x)
 
     model = tf.keras.Model(inputs, outputs, name="U_Net_Xception")
-    return model, base_model
+    return model
 
 
 class TargetAccuracyCallback(tf.keras.callbacks.Callback):
@@ -269,7 +272,7 @@ def train_until_target(model, train_ds, val_ds):
         return
 
     print("Stage 2: fine-tuning top Xception layers...")
-    base_model = model.get_layer(index=1)
+    base_model = model.get_layer("xception")
     base_model.trainable = True
     for layer in base_model.layers[:-36]:
         layer.trainable = False
@@ -303,7 +306,7 @@ def main():
     visualize_batch(sample_images.numpy(), sample_masks.numpy(), pred_masks=None, max_samples=3)
 
     print("Building U-Net Xception model...")
-    model, _ = build_unet_xception()
+    model = build_unet_xception()
     model.summary()
 
     print(f"Training model (target val_accuracy >= {TARGET_ACCURACY:.2f})...")
