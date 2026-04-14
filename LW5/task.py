@@ -26,6 +26,7 @@ BUFFER_SIZE = 1000
 EPOCHS_STAGE1 = 20
 EPOCHS_STAGE2 = 20
 TARGET_ACCURACY = 0.97
+FINETUNE_TOP_LAYERS = 36
 
 SEED = 42
 tf.keras.utils.set_random_seed(SEED)
@@ -138,7 +139,7 @@ class TargetAccuracyCallback(tf.keras.callbacks.Callback):
             self.model.stop_training = True
 
 
-def create_callbacks(stage_name):
+def create_callbacks(stage_name="train"):
     checkpoint_path = OUTPUT_DIR / "best_model.keras"
     return [
         tf.keras.callbacks.ModelCheckpoint(
@@ -273,7 +274,7 @@ def train_until_target(model, train_ds, val_ds):
     print("Stage 2: fine-tuning top Xception layers...")
     base_model = model.get_layer("xception")
     base_model.trainable = True
-    for layer in base_model.layers[:-36]:
+    for layer in base_model.layers[:-FINETUNE_TOP_LAYERS]:
         layer.trainable = False
 
     compile_model(model, learning_rate=1e-5)
