@@ -9,3 +9,6 @@
 # Ignore any directory with "result" in its name
 *result*/
 **/*result*/
+*output*/
+**/*output*/
+LW5/example.ipynb
