@@ -2,6 +2,12 @@
 .venv/
 **/.venv/
 
+# Python bytecode cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
 # VS Code settings
 .vscode/
 **/.vscode/
