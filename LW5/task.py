@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 # Set TF env vars before importing TensorFlow.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # hide INFO and WARNING
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # hide INFO and WARNING
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # turn off oneDNN custom ops
 
 import matplotlib.pyplot as plt
@@ -286,7 +286,8 @@ def train_until_target(model, train_ds, val_ds):
     print("Stage 2: fine-tuning top Xception layers...")
     base_model = model.get_layer("xception")
     base_model.trainable = True
-    for layer in base_model.layers[:-FINETUNE_TOP_LAYERS]:
+    num_to_freeze = max(0, len(base_model.layers) - FINETUNE_TOP_LAYERS)
+    for layer in base_model.layers[:num_to_freeze]:
         layer.trainable = False
 
     compile_model(model, learning_rate=1e-5)
@@ -305,7 +306,7 @@ def main():
     print("Loading Oxford-IIIT Pet dataset via TFDS...")
     train_raw, val_raw, test_raw, info = load_oxford_iiit_pet()
     print("Dataset loaded.")
-    print(f"Dataset train split size: {info.splits['train'].num_examples}")
+    print(f"Dataset train split total size: {info.splits['train'].num_examples} (using subset)")
     print(f"Using train/val/test samples: {TRAIN_SAMPLES}/{VAL_SAMPLES}/{TEST_SAMPLES}")
 
     print("Preparing datasets...")
