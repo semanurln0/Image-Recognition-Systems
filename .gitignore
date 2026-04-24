@@ -1,14 +1,53 @@
-# Python virtual environments
+# Python virtual environment
 .venv/
 **/.venv/
+env/
+venv/
+**/env/
+**/venv/
+
+# Conda environments (WSL)
+miniconda/
+anaconda/
+conda-meta/
+**/conda-meta/
+*.conda
+*.env
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
 # VS Code settings
 .vscode/
 **/.vscode/
 
-# Ignore any directory with "result" in its name
+# Jupyter Notebook
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# ML outputs / results
 *result*/
 **/*result*/
 *output*/
 **/*output*/
+runs/
+logs/
+checkpoints/
+models/
+
+# WSL / Linux artifacts
+*.swp
+*.swo
+*~
+*.log
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Ignore specific notebook
 LW5/example.ipynb

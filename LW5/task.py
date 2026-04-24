@@ -2,15 +2,22 @@
 
 import os
 from pathlib import Path
-
-# Set TF env vars before importing TensorFlow.
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # hide INFO and WARNING
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # turn off oneDNN custom ops
-
+import json
+import time
+from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
+
+# Set TensorFlow C++ log level before importing tensorflow.
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["ABSL_LOG_SEVERITY_THRESHOLD"] = "3"
+os.environ["GLOG_minloglevel"] = "3"
+
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+# Suppress Python-side TensorFlow logging
+tf.get_logger().setLevel("ERROR")
 
 # Paths and hyperparameters
 BASE_DIR = Path(__file__).resolve().parent
@@ -239,9 +246,14 @@ def save_all_predictions(model, dataset):
 
 
 def clear_output_dir():
-    for f in OUTPUT_DIR.glob("*"):
-        if f.is_file():
-            f.unlink()
+    """Remove all files and subdirectories from output directory (except results.json if it exists)."""
+    if OUTPUT_DIR.exists():
+        for item in OUTPUT_DIR.glob("*"):
+            if item.is_file() and item.name != "results.json":
+                item.unlink()
+            elif item.is_dir():
+                import shutil
+                shutil.rmtree(item, ignore_errors=True)
 
 
 def compile_model(model, learning_rate):
@@ -252,9 +264,11 @@ def compile_model(model, learning_rate):
     )
 
 
-def train_until_target(model, train_ds, val_ds):
+def train_until_target(model, train_ds, val_ds, results):
     print("Stage 1: training decoder with frozen Xception encoder...")
     compile_model(model, learning_rate=1e-3)
+    
+    stage1_start = time.time()
     model.fit(
         train_ds,
         validation_data=val_ds,
@@ -262,22 +276,38 @@ def train_until_target(model, train_ds, val_ds):
         callbacks=create_callbacks("stage1"),
         verbose=1,
     )
+    stage1_time = time.time() - stage1_start
+    results["training"]["stage1_time_seconds"] = round(stage1_time, 2)
 
+    val_start = time.time()
     val_metrics = model.evaluate(val_ds, verbose=0)
+    val_time = time.time() - val_start
+    results["validation"]["stage1_time_seconds"] = round(val_time, 2)
+    
     metric_map = dict(zip(model.metrics_names, val_metrics))
-    current_val_acc = float(metric_map.get("accuracy", 0.0))
+    # Try 'accuracy' first, then 'compile_metrics', then use second value (index 1) as fallback
+    current_val_acc = float(metric_map.get("accuracy") or metric_map.get("compile_metrics") or (val_metrics[1] if len(val_metrics) > 1 else 0.0))
+    results["validation"]["stage1_accuracy"] = round(current_val_acc, 4)
     print(f"Validation accuracy after stage 1: {current_val_acc:.4f}")
 
     if current_val_acc >= TARGET_ACCURACY:
+        results["training"]["stopped_after_stage"] = 1
         return
 
     print("Stage 2: fine-tuning top Xception layers...")
-    base_model = model.get_layer("xception")
-    base_model.trainable = True
-    for layer in base_model.layers[:-FINETUNE_TOP_LAYERS]:
-        layer.trainable = False
+    # Unfreeze only the top Xception encoder blocks (layers with names starting with block11+)
+    # Keep earlier blocks frozen to avoid catastrophic forgetting
+    for layer in model.layers:
+        layer_name = layer.name
+        # Unfreeze only top blocks: block11, block12, block13, block14 and decoder layers
+        if any(x in layer_name for x in ["block1", "block2", "block3", "block4", "block5", "block6", "block7", "block8", "block9", "block10"]):
+            layer.trainable = False
+        else:
+            layer.trainable = True
 
     compile_model(model, learning_rate=1e-5)
+    
+    stage2_start = time.time()
     model.fit(
         train_ds,
         validation_data=val_ds,
@@ -285,39 +315,91 @@ def train_until_target(model, train_ds, val_ds):
         callbacks=create_callbacks("stage2"),
         verbose=1,
     )
+    stage2_time = time.time() - stage2_start
+    results["training"]["stage2_time_seconds"] = round(stage2_time, 2)
+    results["training"]["stopped_after_stage"] = 2
+    
+    val_start = time.time()
+    val_metrics_stage2 = model.evaluate(val_ds, verbose=0)
+    val_time = time.time() - val_start
+    results["validation"]["stage2_time_seconds"] = round(val_time, 2)
+    metric_map_stage2 = dict(zip(model.metrics_names, val_metrics_stage2))
+    # Try 'accuracy' first, then 'compile_metrics', then use second value (index 1) as fallback
+    stage2_val_acc = float(metric_map_stage2.get("accuracy") or metric_map_stage2.get("compile_metrics") or (val_metrics_stage2[1] if len(val_metrics_stage2) > 1 else 0.0))
+    results["validation"]["stage2_accuracy"] = round(stage2_val_acc, 4)
 
 
 def main():
+    # Initialize timing and results tracking
+    run_start_time = time.time()
+    results = {
+        "metadata": {
+            "timestamp": datetime.now().isoformat(),
+            "target_accuracy": TARGET_ACCURACY,
+            "train_samples": TRAIN_SAMPLES,
+            "val_samples": VAL_SAMPLES,
+            "test_samples": TEST_SAMPLES,
+            "epochs_stage1": EPOCHS_STAGE1,
+            "epochs_stage2": EPOCHS_STAGE2,
+            "img_size": IMG_SIZE,
+            "batch_size": BATCH_SIZE,
+        },
+        "dataset": {"loading_time_seconds": 0, "preparation_time_seconds": 0},
+        "model": {"build_time_seconds": 0},
+        "training": {"stage1_time_seconds": 0, "stage2_time_seconds": 0, "stopped_after_stage": None},
+        "validation": {"stage1_accuracy": 0, "stage2_accuracy": 0, "stage1_time_seconds": 0, "stage2_time_seconds": 0},
+        "test": {"accuracy": 0, "loss": 0, "evaluation_time_seconds": 0, "prediction_save_time_seconds": 0},
+        "total_runtime_seconds": 0,
+    }
+
     clear_output_dir()
 
     print("Loading Oxford-IIIT Pet dataset via TFDS...")
+    dataset_start = time.time()
     train_raw, val_raw, test_raw, info = load_oxford_iiit_pet()
+    dataset_load_time = time.time() - dataset_start
+    results["dataset"]["loading_time_seconds"] = round(dataset_load_time, 2)
     print("Dataset loaded.")
     print(f"Dataset train split size: {info.splits['train'].num_examples}")
     print(f"Using train/val/test samples: {TRAIN_SAMPLES}/{VAL_SAMPLES}/{TEST_SAMPLES}")
 
     print("Preparing datasets...")
+    prep_start = time.time()
     train_ds = prepare_dataset(train_raw, shuffle=True)
     val_ds = prepare_dataset(val_raw, shuffle=False)
     test_ds = prepare_dataset(test_raw, shuffle=False)
+    prep_time = time.time() - prep_start
+    results["dataset"]["preparation_time_seconds"] = round(prep_time, 2)
 
     print("Visualizing a few input images and masks (before training)...")
     sample_images, sample_masks = next(iter(train_ds))
     visualize_batch(sample_images.numpy(), sample_masks.numpy(), pred_masks=None, max_samples=3)
 
     print("Building U-Net Xception model...")
+    model_start = time.time()
     model = build_unet_xception()
+    model_build_time = time.time() - model_start
+    results["model"]["build_time_seconds"] = round(model_build_time, 2)
     model.summary()
 
     print(f"Training model (target val_accuracy >= {TARGET_ACCURACY:.2f})...")
-    train_until_target(model, train_ds, val_ds)
+    train_until_target(model, train_ds, val_ds, results)
 
     print("Evaluating on test data...")
+    test_eval_start = time.time()
     test_metrics = model.evaluate(test_ds, verbose=2)
+    test_eval_time = time.time() - test_eval_start
+    results["test"]["evaluation_time_seconds"] = round(test_eval_time, 2)
+    
     metrics_dict = dict(zip(model.metrics_names, test_metrics))
     print("Test metrics:", metrics_dict)
-
-    test_accuracy = float(metrics_dict.get("accuracy", 0.0))
+    
+    # Try 'accuracy' first, then 'compile_metrics', then use second value (index 1) as fallback
+    test_accuracy = float(metrics_dict.get("accuracy") or metrics_dict.get("compile_metrics") or (test_metrics[1] if len(test_metrics) > 1 else 0.0))
+    test_loss = float(metrics_dict.get("loss", test_metrics[0] if test_metrics else 0.0))
+    results["test"]["accuracy"] = round(test_accuracy, 4)
+    results["test"]["loss"] = round(test_loss, 4)
+    
     if test_accuracy < TARGET_ACCURACY:
         print(
             f"WARNING: test accuracy {test_accuracy:.4f} is below target {TARGET_ACCURACY:.2f}. "
@@ -325,7 +407,10 @@ def main():
         )
 
     print("Saving predictions for all test images...")
+    pred_save_start = time.time()
     save_all_predictions(model, test_ds)
+    pred_save_time = time.time() - pred_save_start
+    results["test"]["prediction_save_time_seconds"] = round(pred_save_time, 2)
 
     print("Generating visualization for a few samples...")
     test_images, test_masks = next(iter(test_ds))
@@ -337,6 +422,19 @@ def main():
         pred_masks=pred_masks,
         max_samples=3,
     )
+
+    # Calculate total runtime and save results
+    total_time = time.time() - run_start_time
+    results["total_runtime_seconds"] = round(total_time, 2)
+    
+    results_path = OUTPUT_DIR / "results.json"
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\n" + "="*60)
+    print(f"Results saved to {results_path}")
+    print(f"Total runtime: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
+    print("="*60)
+    print(json.dumps(results, indent=2))
 
     print("Done.")
 
